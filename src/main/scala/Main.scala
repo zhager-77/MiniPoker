@@ -31,6 +31,8 @@ object Main extends IOApp.Simple:
         logHandler = None
       )
       history <- HistoryRepository.make[IO](xa)
+      players <- history.loadAll
+      _ <- store.save(players)
       poker = PokerService.make[IO](store, history)
       sem <- Semaphore[IO](config.poker.maxConcurrentRequests)
       routes = PokerRoutes

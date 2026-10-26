@@ -1,17 +1,22 @@
 package db
 
-import cats.effect.MonadCancelThrow
+import cats.MonadThrow
+import cats.effect.{MonadCancelThrow, Ref}
 import cats.syntax.all.*
 import doobie.*
 import doobie.implicits.*
 import doobie.h2.implicits.*
+import logic.Logic
+
 import java.util.UUID
-import poker.{Card, Player}
+import poker.{Card, Hand, Player, PokerError}
 import poker.Card.{Rank, Suit}
+import poker.Ids.PlayerId
 
 // одна строка = рука одного игрока, карты хранятся в своем формате
 trait HistoryRepository[F[_]]:
   def save(requestID: UUID, players: List[Player]): F[Unit]
+  def loadAll: F[List[Player]]
 
 object HistoryRepository:
 
@@ -48,6 +53,22 @@ object HistoryRepository:
             )
           )
           insert.updateMany(rows).transact(xa).void
+
+        def loadAll: F[List[Player]] = {
+          sql"SELECT player_id, cards FROM hand_history"
+            .query[(String, String)]
+            .to[List]
+            .transact(xa)
+            .flatMap(rows =>
+              rows.traverse(rowToPlayer) match {
+                case Right(players) => players.pure[F]
+                case Left(error) =>
+                  MonadThrow[F].raiseError(
+                    new RuntimeException(s"Битая запись в историй: $error")
+                  )
+              }
+            )
+        }
     }
 
   private def encodeCards(cards: List[Card]): String =
@@ -76,3 +97,45 @@ object HistoryRepository:
       case Suit.Spades   => "s"
 
     rank + suit
+
+  private def decodeCard(card: String): Either[PokerError, Card] =
+
+    if card.length != 2 then Left(PokerError.InvalidRank("Invalid format"))
+    else
+      val rank: Either[PokerError, Rank] = card.init match
+        case "2"   => Right(Rank.Two)
+        case "3"   => Right(Rank.Three)
+        case "4"   => Right(Rank.Four)
+        case "5"   => Right(Rank.Five)
+        case "6"   => Right(Rank.Six)
+        case "7"   => Right(Rank.Seven)
+        case "8"   => Right(Rank.Eight)
+        case "9"   => Right(Rank.Nine)
+        case "T"   => Right(Rank.Ten)
+        case "J"   => Right(Rank.Jack)
+        case "Q"   => Right(Rank.Queen)
+        case "K"   => Right(Rank.King)
+        case "A"   => Right(Rank.Ace)
+        case other => Left(PokerError.InvalidRank(other))
+
+      val suit: Either[PokerError, Suit] = card.last match
+        case 'd'   => Right(Suit.Diamonds)
+        case 'h'   => Right(Suit.Hearts)
+        case 'c'   => Right(Suit.Clubs)
+        case 's'   => Right(Suit.Spades)
+        case other => Left(PokerError.InvalidSuit(other.toString))
+
+      for
+        r <- rank
+        s <- suit
+      yield Card(s, r)
+
+  private def decodeCards(raw: String): Either[PokerError, List[Card]] =
+    raw.split(" ").toList.traverse(decodeCard)
+
+  private def rowToPlayer(id: String, raw: String): Either[PokerError, Player] =
+    decodeCards(raw) match {
+      case Right(cards) =>
+        Right(Player(PlayerId(id), Hand(Logic.evaluate(cards), cards)))
+      case Left(error) => Left(error)
+    }
