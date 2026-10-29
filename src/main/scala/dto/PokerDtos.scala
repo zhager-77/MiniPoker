@@ -15,7 +15,7 @@ object PokerDtos:
     given Decoder[HandDto] = deriveDecoder[HandDto]
     given Encoder[HandDto] = deriveEncoder[HandDto]
 
-  final case class StatsDto(totalRequests: Int, inFlight: Int)
+  final case class StatsDto(totalRequests: Int, inFlight: Int, rejectedRequests: Int, avgProcessingMs: Long)
   object StatsDto:
     given Encoder[StatsDto] = deriveEncoder[StatsDto]
 

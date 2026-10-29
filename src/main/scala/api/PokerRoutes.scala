@@ -11,6 +11,7 @@ import dto.Converter.*
 import service.{PokerService, StatsService}
 import poker.Ids.PlayerId
 import cats.effect.syntax.all.*
+import cats.effect.Clock
 
 import scala.concurrent.TimeoutException
 import scala.concurrent.duration.FiniteDuration
@@ -28,47 +29,59 @@ object PokerRoutes:
     HttpRoutes.of[F] {
       case GET -> Root / "poker" / "stats" =>
         statsService.get.flatMap(stats =>
-          Ok(StatsDto(stats.totalRequests, stats.inFlight))
+          Ok(StatsDto(stats.totalRequests, stats.inFlight, stats.rejectedRequests, stats.avgProcessingMs))
         )
       case GET -> Root / "poker" / "best-hand" / playerId =>
         pokerService.bestHand(PlayerId(playerId)).flatMap {
           case Some(hand) => Ok(fromHand(hand))
           case None       => NotFound(StatusMessage("Player not found"))
         }
-      // Запрос, который получил 503, не попадает в статистику. attemptAs вместо as, кривой json падает 400, а не 500
+      // Запрос, который получил 503, попадает в статистику. attemptAs вместо as, кривой json падает 400, а не 500
       case req @ POST -> Root / "poker" / "evaluate-players" =>
         semaphore.acquire.timeout(acquireTimeout).attempt.flatMap {
           case Left(_: TimeoutException) =>
-            ServiceUnavailable(
-              StatusMessage("Too many concurrent requests, please retry later")
-            )
+            statsService.reject *>
+              ServiceUnavailable(
+                StatusMessage(
+                  "Too many concurrent requests, please retry later"
+                )
+              )
           case Left(other) => other.raiseError[F, Response[F]]
           case Right(_) =>
-            (statsService.startRequest *> req
-              .attemptAs[List[UserHandDto]]
-              .value
-              .flatMap {
-                case Left(failure) =>
-                  BadRequest(
-                    StatusMessage(s"Failed request: ${failure.message}")
-                  )
-                case Right(body) =>
-                  body.traverse(toPlayer) match
-                    case Left(error) =>
-                      ErrorHandling.toHttpResponse[F](error).pure[F]
-                    case Right(players) =>
-                      pokerService.evaluatePlayers(players).flatMap {
-                        case Left(error) =>
-                          ErrorHandling.toHttpResponse[F](error).pure[F]
-                        case Right(result) =>
-                          Ok(
-                            EvaluatePlayersDto(
-                              result.winners.map(fromPlayer),
-                              result.losers.map(fromPlayer)
+            val handle: F[Response[F]] =
+              req
+                .attemptAs[List[UserHandDto]]
+                .value
+                .flatMap {
+                  case Left(failure) =>
+                    BadRequest(
+                      StatusMessage(s"Failed request: ${failure.message}")
+                    )
+                  case Right(body) =>
+                    body.traverse(toPlayer) match
+                      case Left(error) =>
+                        ErrorHandling.toHttpResponse[F](error).pure[F]
+                      case Right(players) =>
+                        pokerService.evaluatePlayers(players).flatMap {
+                          case Left(error) =>
+                            ErrorHandling.toHttpResponse[F](error).pure[F]
+                          case Right(result) =>
+                            Ok(
+                              EvaluatePlayersDto(
+                                result.winners.map(fromPlayer),
+                                result.losers.map(fromPlayer)
+                              )
                             )
-                          )
-                      }
-              })
-              .guarantee(statsService.finishRequest >> semaphore.release)
+                        }
+                }
+            (statsService.startRequest *> (
+              for
+                start <- Clock[F].monotonic
+                resp <- handle.guarantee(
+                  Clock[F].monotonic
+                    .flatMap(end => statsService.finishRequest(end - start))
+                )
+              yield resp
+              )).guarantee(semaphore.release)
         }
     }
