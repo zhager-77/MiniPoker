@@ -44,31 +44,33 @@ object PokerRoutes:
             )
           case Left(other) => other.raiseError[F, Response[F]]
           case Right(_) =>
-            (statsService.startRequest *> req
-              .attemptAs[List[UserHandDto]]
-              .value
-              .flatMap {
-                case Left(failure) =>
-                  BadRequest(
-                    StatusMessage(s"Failed request: ${failure.message}")
-                  )
-                case Right(body) =>
-                  body.traverse(toPlayer) match
-                    case Left(error) =>
-                      ErrorHandling.toHttpResponse[F](error).pure[F]
-                    case Right(players) =>
-                      pokerService.evaluatePlayers(players).flatMap {
-                        case Left(error) =>
-                          ErrorHandling.toHttpResponse[F](error).pure[F]
-                        case Right(result) =>
-                          Ok(
-                            EvaluatePlayersDto(
-                              result.winners.map(fromPlayer),
-                              result.losers.map(fromPlayer)
+            val handle: F[Response[F]] =
+              req
+                .attemptAs[List[UserHandDto]]
+                .value
+                .flatMap {
+                  case Left(failure) =>
+                    BadRequest(
+                      StatusMessage(s"Failed request: ${failure.message}")
+                    )
+                  case Right(body) =>
+                    body.traverse(toPlayer) match
+                      case Left(error) =>
+                        ErrorHandling.toHttpResponse[F](error).pure[F]
+                      case Right(players) =>
+                        pokerService.evaluatePlayers(players).flatMap {
+                          case Left(error) =>
+                            ErrorHandling.toHttpResponse[F](error).pure[F]
+                          case Right(result) =>
+                            Ok(
+                              EvaluatePlayersDto(
+                                result.winners.map(fromPlayer),
+                                result.losers.map(fromPlayer)
+                              )
                             )
-                          )
-                      }
-              })
-              .guarantee(statsService.finishRequest >> semaphore.release)
+                        }
+                }
+            (statsService.startRequest *> handle.guarantee(statsService.finishRequest))
+              .guarantee(semaphore.release)
         }
     }

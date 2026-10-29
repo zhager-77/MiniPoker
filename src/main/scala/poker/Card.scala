@@ -4,7 +4,7 @@ object Card:
 
   enum Suit:
     case Diamonds, Hearts, Clubs, Spades
-  
+
   // без джокера, так как в классическом его нет
   enum Rank(val weight: Int):
     case Two extends Rank(2)

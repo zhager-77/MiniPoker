@@ -8,7 +8,7 @@ import poker.Card.Rank.Ace
 import Ordering.Implicits.*
 
 object Logic:
-  
+
   private val HandSize = 5
   // туз весит 14, поэтому колесо проверяется отдельно
   def evaluate(cards: List[Card]): Combination =
@@ -34,7 +34,7 @@ object Logic:
           case (false, false) => Combination.HighCard
         }
     }
-  //List(вес комбинации, ранги по важности). Сравнивается как список, учитывает комбинацию и кикера
+  // List(вес комбинации, ранги по важности). Сравнивается как список, учитывает комбинацию и кикера
   def handRank(cards: List[Card]): List[Int] =
     val rankWeights =
       if isWheel(cards) then List(5, 4, 3, 2, 1)
@@ -56,7 +56,7 @@ object Logic:
         .toList
         .sortBy(x => (-x._2.size, -x._1.weight))
         .flatMap(x => x._2)
-        
+
   // на пустом списке .max упадет, ее убирает validateNotEmpty
   def findWinners(players: List[Player]): Result =
     val ranked = players.map(player => (player, handRank(player.hand.cards)))
@@ -86,8 +86,8 @@ object Logic:
   def validateNotEmpty(players: List[Player]): Either[PokerError, Unit] =
     if players.isEmpty then Left(PokerError.EmptyPlayerList)
     else Right(())
-    
-  //завершаем на первой ошибке
+
+  // завершаем на первой ошибке
   def validateAll(players: List[Player]): Either[PokerError, Unit] =
     for
       _ <- validateNotEmpty(players)
